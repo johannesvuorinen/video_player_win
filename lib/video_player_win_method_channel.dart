@@ -13,9 +13,15 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
   @visibleForTesting
   final methodChannel = const MethodChannel('video_player_win');
 
-  final playerMap = <int, WinVideoPlayerController>{};
+  final playerMap = <int, WeakReference<WinVideoPlayerController>>{};
 
   MethodChannelVideoPlayerWin() {
+    assert(() {
+      // When hot-reload in debugging mode, clear all old players created before hot-reload
+      methodChannel.invokeMethod<void>('clearAll');
+      return true;
+    }());
+
     methodChannel.setMethodCallHandler((call) async {
       //log("[videoplayer] native->flutter: $call");
       int? textureId = call.arguments["textureId"];
@@ -28,7 +34,7 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
 
       if (call.method == "OnPlaybackEvent") {
         int state = call.arguments["state"]!;
-        player.onPlaybackEvent_(state);
+        player.target?.onPlaybackEvent_(state);
       } else {
         assert(false, "unknown call from native: ${call.method}");
       }
@@ -42,32 +48,30 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
 
   @override
   WinVideoPlayerController? getPlayerByTextureId(int textureId) {
-    return playerMap[textureId];
+    return playerMap[textureId]?.target;
   }
 
   @override
-  Future<WinVideoPlayerValue?> openVideo(
-      WinVideoPlayerController player, int textureId, String path) async {
-    var arguments = await methodChannel
-        .invokeMethod<Map>('openVideo', {"textureId": -1, "path": path});
+  Future<WinVideoPlayerValue?> openVideo(WinVideoPlayerController player, int textureId, String path) async {
+    var arguments = await methodChannel.invokeMethod<Map>('openVideo', {"textureId": -1, "path": path});
     if (arguments == null) return null;
     if (arguments["result"] == false) return null;
 
     int width = arguments["videoWidth"];
     int height = arguments["videoHeight"];
     double volume = arguments["volume"];
+    int textureId = arguments["textureId"];
     var value = WinVideoPlayerValue(
+      textureId: textureId,
       position: Duration.zero,
       duration: Duration(milliseconds: arguments["duration"]),
       size: Size(width.toDouble(), height.toDouble()),
       isPlaying: false,
-      hasError: false,
       isInitialized: true,
       volume: volume,
     );
 
-    value.textureId = arguments["textureId"];
-    playerMap[value.textureId] = player;
+    playerMap[value.textureId] = WeakReference<WinVideoPlayerController>(player);
     return value;
   }
 
@@ -84,43 +88,37 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
   @override
   Future<void> seekTo(int textureId, int ms) async {
     // TODO: will auto play after seek, it seems there is no way to seek without playing in windows media foundation API...
-    await methodChannel
-        .invokeMethod<bool>('seekTo', {"textureId": textureId, "ms": ms});
+    await methodChannel.invokeMethod<bool>('seekTo', {"textureId": textureId, "ms": ms});
   }
 
   @override
   Future<int> getCurrentPosition(int textureId) async {
     // TODO: sometimes will return 0 when seeking... seems a bug in windows media foundation API...
-    var value = await methodChannel
-        .invokeMethod<int>('getCurrentPosition', {"textureId": textureId});
+    var value = await methodChannel.invokeMethod<int>('getCurrentPosition', {"textureId": textureId});
     return value ?? -1;
   }
 
   @override
   Future<int> getDuration(int textureId) async {
-    var value = await methodChannel
-        .invokeMethod<int>('getDuration', {"textureId": textureId});
+    var value = await methodChannel.invokeMethod<int>('getDuration', {"textureId": textureId});
     return value ?? -1;
   }
 
   @override
   Future<void> setPlaybackSpeed(int textureId, double speed) async {
-    await methodChannel.invokeMethod<bool>(
-        'setPlaybackSpeed', {"textureId": textureId, "speed": speed});
+    await methodChannel.invokeMethod<bool>('setPlaybackSpeed', {"textureId": textureId, "speed": speed});
   }
 
   @override
   Future<void> setVolume(int textureId, double volume) async {
-    await methodChannel.invokeMethod<bool>(
-        'setVolume', {"textureId": textureId, "volume": volume});
+    await methodChannel.invokeMethod<bool>('setVolume', {"textureId": textureId, "volume": volume});
   }
 
   @override
   Future<void> dispose(int textureId) async {
-    await methodChannel
-        .invokeMethod<bool>('shutdown', {"textureId": textureId});
+    await methodChannel.invokeMethod<bool>('shutdown', {"textureId": textureId});
     // NOTE: delay some time to wait last callbacks finished
-    await Future.delayed(const Duration(milliseconds: 3000));
+    await Future.delayed(const Duration(milliseconds: 100));
     await methodChannel.invokeMethod<bool>('dispose', {"textureId": textureId});
   }
 }
