@@ -14,13 +14,13 @@
 class MyPlayerCallback : public IUnknown
 {
 public:
-#ifdef WIN32
+//#ifdef WIN32
 	virtual void OnProcessFrame(ID3D11Texture2D* texture) = 0;
-#else
+//#else
 	virtual void OnProcessSample(REFGUID guidMajorMediaType, DWORD dwSampleFlags,
 		LONGLONG llSampleTime, LONGLONG llSampleDuration, const BYTE* pSampleBuffer,
 		DWORD dwSampleSize) = 0;
-#endif
+//#endif
 };
 
 class MyPlayer : public IMFAsyncCallback
