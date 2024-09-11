@@ -42,15 +42,15 @@ public:
     textureId = -1;
   }
 
-  inline STDMETHODIMP QueryInterface(REFIID riid, void** ppv) {
+	inline STDMETHODIMP QueryInterface(REFIID riid, void** ppv) {
     return MyPlayer::QueryInterface(riid, ppv);
-  }
-  inline STDMETHODIMP_(ULONG) AddRef() {
-    return MyPlayer::AddRef();
-  }
-  STDMETHODIMP_(ULONG) Release() {
-    return MyPlayer::Release();
-  }
+	}
+	inline STDMETHODIMP_(ULONG) AddRef() {
+		return MyPlayer::AddRef();
+	}
+	STDMETHODIMP_(ULONG) Release() {
+		return MyPlayer::Release();
+	}
 
 private:
   uint64_t lastFrameTime = 0;
@@ -170,13 +170,6 @@ private:
         texture_registar_->MarkTextureFrameAvailable(textureId);
       }
   }
-
-  void OnProcessFrame(ID3D11Texture2D* texture) {
-	  //if (texture_registar_ != NULL && textureId != -1) {
-	  //	initTexture(texture);
-	  //    texture_registar_->MarkTextureFrameAvailable(textureId);
-	  //}
-  }
 };
 
 std::map<int64_t, MyPlayerInternal*> playerMap; // textureId -> MyPlayerInternal*
@@ -207,7 +200,7 @@ MyPlayerInternal* getPlayerById(int64_t textureId, bool autoCreate = false) {
   return data;
 }
 
-void destroyPlayerById(int64_t textureId, bool toRelease) {
+void destroyPlayerById(int64_t textureId) {
   std::lock_guard<std::mutex> lock(mapMutex);
   MyPlayerInternal* data = playerMap[textureId];
   if (data == NULL) return;
@@ -217,12 +210,7 @@ void destroyPlayerById(int64_t textureId, bool toRelease) {
     data->textureId = -1;
   }
 
-  if (toRelease) {
-    data->Release();
-  } else {
-    data->Shutdown();
-  }
-  //std::cout << "native destroy player id: " << textureId << std::endl;
+  data->Release();
 }
 
 // Jacky }
@@ -261,17 +249,6 @@ VideoPlayerWinPlugin::~VideoPlayerWinPlugin() {
 void VideoPlayerWinPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-
-  if (method_call.method_name().compare("clearAll") == 0) {
-    // called when hot-restart in debug mode, and clear all the old players which created before hot-restart
-    for(auto iter = playerMap.begin(); iter != playerMap.end(); iter++) {
-      std::cout << "[video_player_win] old player found, deleting" << std::endl;
-      delete iter->second;
-    }
-    playerMap.clear();
-    result->Success();
-    return;
-  }
 
   //std::cout << "HandleMethodCall: " << method_call.method_name() << std::endl;
   flutter::EncodableMap arguments = std::get<flutter::EncodableMap>(*method_call.arguments());
@@ -322,9 +299,7 @@ void VideoPlayerWinPlugin::HandleMethodCall(
         map[flutter::EncodableValue("volume")] = flutter::EncodableValue((double)volume);
         shared_result->Success(flutter::EncodableValue(map));
       } else {
-        // TODO: call destroyPlayerById(true) when open video failed here will crash since player->Release() called... how to fix?
-        destroyPlayerById(player->textureId, false);
-
+        destroyPlayerById(player->textureId);
         flutter::EncodableMap map;
         map[flutter::EncodableValue("result")] = flutter::EncodableValue(false);
         shared_result->Success(map);
@@ -366,7 +341,7 @@ void VideoPlayerWinPlugin::HandleMethodCall(
     player->Shutdown();
     result->Success(flutter::EncodableValue(true));
   } else if (method_call.method_name().compare("dispose") == 0) {
-    destroyPlayerById(textureId, true);
+    destroyPlayerById(textureId);
     result->Success(flutter::EncodableValue(true));
   } else {
     result->NotImplemented();
