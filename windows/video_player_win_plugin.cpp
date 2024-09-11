@@ -18,13 +18,7 @@
 #include <Shlwapi.h>
 #include <stdio.h>
 
-#define WM_FLUTTER_TASK (WM_APP + 8898)
-
 // Jacky {
-flutter::PluginRegistrarWindows *g_registrar; // Jacky
-
-#include <stack>
-#include <set>
 
 #include <chrono>
 flutter::MethodChannel<flutter::EncodableValue>* gMethodChannel = NULL;
@@ -34,105 +28,36 @@ inline uint64_t getCurrentTime() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-#include <set>
-class ScreenOnKeeper {
-public:
-  ScreenOnKeeper() {
-    m_id = ++g_lastId;
-
-    if (g_handle == 0) {
-      REASON_CONTEXT ctx;
-      ctx.Version = POWER_REQUEST_CONTEXT_VERSION;
-      ctx.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
-      ctx.Reason.SimpleReasonString = L"[video_player_win]";
-      g_handle = PowerCreateRequest(&ctx);
-    }
-  }
-
-  ~ScreenOnKeeper() {
-    enable(false);
-  }
-
-  void enable(bool b) {
-    if (m_isEnabled == b)
-      return;
-    m_isEnabled = b;
-    const std::lock_guard<std::mutex> lock(g_keeperMutex);
-
-    bool exists = g_keeperIdSet.find(m_id) != g_keeperIdSet.end();
-
-    if (b) {
-      if (!exists) {
-        if (g_keeperIdSet.empty()) {
-          PowerSetRequest(g_handle, PowerRequestSystemRequired);
-          PowerSetRequest(g_handle, PowerRequestDisplayRequired);
-          //std::cout << "[video_player_win] enable keep screen on" << std::endl;
-        }
-        g_keeperIdSet.insert(m_id);
-      }
-    } else {
-      if (exists) {
-        g_keeperIdSet.erase(m_id);
-        if (g_keeperIdSet.empty()) {
-          PowerClearRequest(g_handle, PowerRequestSystemRequired);
-          PowerClearRequest(g_handle, PowerRequestDisplayRequired);
-          //std::cout << "[video_player_win] disable keep screen on" << std::endl;
-        }
-      }
-    }
-  }
-private:
-  bool m_isEnabled = false;
-  int m_id;
-
-  static int g_lastId;
-  static std::set<int> g_keeperIdSet;
-  static std::mutex g_keeperMutex;
-  static HANDLE g_handle;
-};
-int ScreenOnKeeper::g_lastId = 0;
-std::set<int> ScreenOnKeeper::g_keeperIdSet;
-std::mutex ScreenOnKeeper::g_keeperMutex;
-HANDLE ScreenOnKeeper::g_handle = 0;
-
-
 flutter::TextureRegistrar* texture_registar_ = NULL;
 
 class MyPlayerInternal : public MyPlayer, public MyPlayerCallback {
 public:
   int64_t textureId = -1;
-  FlutterDesktopGpuSurfaceDescriptor texture_buffer;
-  HWND mChildHWND = 0;
+  FlutterDesktopPixelBuffer pixel_buffer;
 
   MyPlayerInternal() {}
   ~MyPlayerInternal() {
-    keepScreenOn(false);
+    if (m_pBuffer != NULL) delete m_pBuffer;
+    m_pBuffer = NULL;
     textureId = -1;
   }
 
-	inline STDMETHODIMP QueryInterface(REFIID riid, void** ppv) {
+  inline STDMETHODIMP QueryInterface(REFIID riid, void** ppv) {
     return MyPlayer::QueryInterface(riid, ppv);
-	}
-	inline STDMETHODIMP_(ULONG) AddRef() {
-		return MyPlayer::AddRef();
-	}
-	STDMETHODIMP_(ULONG) Release() {
-		return MyPlayer::Release();
-	}
+  }
+  inline STDMETHODIMP_(ULONG) AddRef() {
+    return MyPlayer::AddRef();
+  }
+  STDMETHODIMP_(ULONG) Release() {
+    return MyPlayer::Release();
+  }
 
 private:
-  bool mTextureInited = false;
-  HANDLE mSharedTextureHandle = 0;
-  ScreenOnKeeper m_screenOnKeeper;
-
+  uint64_t lastFrameTime = 0;
   enum PlaybackState { IDLE = 0, BUFFERING_START, BUFFERING_END, START, PAUSE, STOP, END, SESSION_ERROR };
   PlaybackState mPlaybackState = IDLE;
-
-  void keepScreenOn(bool keepOn) {
-    if (m_VideoWidth <= 0) // if audio-only media
-      return;
-    m_screenOnKeeper.enable(keepOn);
-  }
+  BYTE* m_pBuffer = NULL;
+  DWORD m_lastSampleSize = 0;
 
   void OnPlayerEvent(MediaEventType event) override
   {
@@ -145,23 +70,18 @@ private:
         break;
       case MESessionStarted:
         mPlaybackState = START;
-        keepScreenOn(true);
         break;
       case MESessionPaused:
         mPlaybackState = PAUSE;
-        keepScreenOn(false);
         break;
       case MESessionStopped:
         mPlaybackState = STOP;
-        keepScreenOn(false);
         break;
       case MESessionClosed:
         mPlaybackState = IDLE;
-        keepScreenOn(false);
         break;
       case MESessionEnded:
         mPlaybackState = END;
-        keepScreenOn(false);
         break;
       case MEError:
         mPlaybackState = SESSION_ERROR;
@@ -170,49 +90,85 @@ private:
         return;
     }
 
-    HWND hwnd = g_registrar->GetView()->GetNativeWindow();
-    if (hwnd != NULL && IsWindow(hwnd))
-    {
-      PostMessage(GetParent(hwnd), WM_FLUTTER_TASK, textureId, mPlaybackState);
-    }
-    else
-    {
-      std::cout << "[video_player_win] hwnd is not a window." << std::endl;
-    }
+    flutter::EncodableMap arguments;
+    arguments[flutter::EncodableValue("textureId")] = flutter::EncodableValue(textureId);
+    arguments[flutter::EncodableValue("state")] = flutter::EncodableValue(mPlaybackState);
+    gMethodChannel->InvokeMethod("OnPlaybackEvent", std::make_unique<flutter::EncodableValue>(arguments));
   }
 
-  void initTexture(ID3D11Texture2D* texture)
+  void OnProcessSample(REFGUID guidMajorMediaType, DWORD dwSampleFlags,
+      LONGLONG llSampleTime, LONGLONG llSampleDuration, const BYTE* pSampleBuffer,
+      DWORD dwSampleSize)
   {
-    if (!mTextureInited)
-    {
-      HRESULT hr;
-      D3D11_TEXTURE2D_DESC desc;
-      texture->GetDesc(&desc);
+      if (textureId == -1) return; //player maybe shutdown or deleted
+      uint64_t now = getCurrentTime();
+      if (now - lastFrameTime < 30) return;
+      lastFrameTime = now;
 
-      wil::com_ptr<IDXGIResource1> resource;
-      texture->QueryInterface(IID_PPV_ARGS(&resource));
-      hr = resource->GetSharedHandle(&mSharedTextureHandle);
-      if (!SUCCEEDED(hr)) {
-        std::cout << "[video_player_win] native GetSharedHandle failed: " << hr << std::endl;
-        return;
+      if (m_lastSampleSize != dwSampleSize) {
+        m_lastSampleSize = dwSampleSize;
+        if (m_pBuffer != NULL) delete m_pBuffer;
+        m_pBuffer = new BYTE[m_VideoWidth * (m_VideoHeight + 1) * 4 + 10]; // height + 1 to avoid crash for odd width/height video
+
+        pixel_buffer.width = m_VideoWidth;
+        pixel_buffer.height = m_VideoHeight;
+        pixel_buffer.buffer = m_pBuffer;
+      } else if (pixel_buffer.width != m_VideoWidth) {
+        // ex. video 1280x720 -> 720x1280, sample size won't change, but we need set the correct resolution
+        pixel_buffer.width = m_VideoWidth;
+        pixel_buffer.height = m_VideoHeight;
       }
 
-      texture_buffer.struct_size = sizeof(FlutterDesktopGpuSurfaceDescriptor);
-      texture_buffer.width = desc.Width;
-      texture_buffer.height = desc.Height;
-      texture_buffer.format = kFlutterDesktopPixelFormatBGRA8888;  //kFlutterDesktopPixelFormatRGBA8888; //or kFlutterDesktopPixelFormatBGRA8888
-      texture_buffer.handle = mSharedTextureHandle;
+      // NV12 -> RGBA
+      // ref: https://blog.csdn.net/u010842019/article/details/52086103
+      #define ALIGN16(v) ((v+15)&~15)
+      UINT32 strideW = ALIGN16(m_VideoWidth);
+      UINT32 strideH = ALIGN16(m_VideoHeight);
+      if (strideW * strideH * 3 / 2 > dwSampleSize) {
+        strideH = m_VideoHeight; //workaround, why sometimes height is no need to align ?
+      }
 
-      mTextureInited = true;
-    }
-  }
+      const BYTE *ubase = pSampleBuffer + strideW * strideH;
+      //const BYTE *pU = ubase;
+      for (UINT32 y = 0; y < m_VideoHeight; y+=2) {
+        const BYTE *pY = pSampleBuffer + y * strideW;
+        const BYTE *pY2 = pY + strideW;
+        BYTE *pDst = m_pBuffer + y * m_VideoWidth * 4;
+        BYTE *pDst2 = pDst + m_VideoWidth * 4;
 
-  void OnProcessFrame(ID3D11Texture2D* texture)
-  {
-    if (texture_registar_ != NULL && textureId != -1) {
-      initTexture(texture);
-      texture_registar_->MarkTextureFrameAvailable(textureId);
-    }
+        const BYTE *ubaseDelta = ubase + y / 2 * strideW;
+        for (UINT32 x = 0; x < m_VideoWidth; x+=2) {
+          BYTE Y;
+          int U = (int)ubaseDelta[x] - 128;
+          int V = (int)ubaseDelta[x+1] - 128;
+
+          int dy = (1435 * V) >> 10;
+          int du = (- 352 * U - 731 * V) >> 10;
+          int dv = (1814 * U) >> 10;
+
+          int tmp;
+          #define myByteClamp(dst, value)  \
+            tmp = value;                        \
+            dst = tmp < 0 ? 0 : tmp > 255 ? 255 : (BYTE)tmp;
+
+          // ref: https://zhuanlan.zhihu.com/p/397551265
+          #define _convert(pY, pDst)            \
+            Y = *(pY++);                      \
+            myByteClamp(*(pDst++), Y + dy);   \
+            myByteClamp(*(pDst++), Y + du);   \
+            myByteClamp(*(pDst++), Y + dv);   \
+            pDst++;
+
+          _convert(pY, pDst); //X0Y0
+          _convert(pY, pDst); //X1Y0
+          _convert(pY2, pDst2); //X0Y1
+          _convert(pY2, pDst2); //X1Y1
+        }
+      }
+
+      if (texture_registar_ != NULL && textureId != -1) {
+        texture_registar_->MarkTextureFrameAvailable(textureId);
+      }
   }
 };
 
@@ -221,12 +177,10 @@ std::mutex mapMutex;
 bool isMFInited = false;
 
 void createTexture(MyPlayerInternal* data) {
-  memset(&data->texture_buffer, 0, sizeof(data->texture_buffer));
-
-  flutter::TextureVariant* texture = new flutter::TextureVariant(flutter::GpuSurfaceTexture(
-    kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle,
-    [=](size_t width, size_t height) -> const FlutterDesktopGpuSurfaceDescriptor* {
-      return &data->texture_buffer;
+  memset(&data->pixel_buffer, 0, sizeof(data->pixel_buffer));
+  flutter::TextureVariant* texture = new flutter::TextureVariant(flutter::PixelBufferTexture(
+    [=](size_t width, size_t height) -> const FlutterDesktopPixelBuffer* {
+      return &data->pixel_buffer;
     }));
   data->textureId = texture_registar_->RegisterTexture(texture);
 }
@@ -271,7 +225,6 @@ namespace video_player_win {
 // static
 void VideoPlayerWinPlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows *registrar) {
-  g_registrar = registrar; //Jacky
   auto channel =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           registrar->messenger(), "video_player_win",
@@ -291,34 +244,9 @@ void VideoPlayerWinPlugin::RegisterWithRegistrar(
           &flutter::StandardMethodCodec::GetInstance()); //Jacky
 }
 
-std::optional<LRESULT> VideoPlayerWinPlugin::HandleWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-  std::optional<LRESULT> result = std::nullopt;
-  if (WM_FLUTTER_TASK != message)
-  {
-    return result;
-  }
-  flutter::EncodableMap arguments;
-  arguments[flutter::EncodableValue("textureId")] = flutter::EncodableValue((INT64)wParam);
-  arguments[flutter::EncodableValue("state")] = flutter::EncodableValue((int)lParam);
-  gMethodChannel->InvokeMethod("OnPlaybackEvent", std::make_unique<flutter::EncodableValue>(arguments));
-  // std::cout << "OnPlaybackEvent textureId: " << wParam << ", state: " << lParam << std::endl;
-  return 0;
-}
-
-VideoPlayerWinPlugin::VideoPlayerWinPlugin() {
-  window_proc_id = g_registrar->RegisterTopLevelWindowProcDelegate(
-  [&](HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-  {
-    return HandleWindowProc(hWnd, message, wParam, lParam);
-  });
-}
+VideoPlayerWinPlugin::VideoPlayerWinPlugin() {}
 
 VideoPlayerWinPlugin::~VideoPlayerWinPlugin() {
-  if(window_proc_id != -1) {
-    g_registrar->UnregisterTopLevelWindowProcDelegate(window_proc_id);
-    window_proc_id = -1;
-  }
   texture_registar_ = NULL; //Jacky
   MFShutdown();
 }
@@ -364,8 +292,7 @@ void VideoPlayerWinPlugin::HandleMethodCall(
 
     textureId = player->textureId;
     std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> shared_result = std::move(result);
-    HWND hwnd = GetAncestor(g_registrar->GetView()->GetNativeWindow(), GA_ROOT);
-    HRESULT hr = player->OpenURL(wPath, player, hwnd, [=](bool isSuccess) {
+    HRESULT hr = player->OpenURL(wPath, player, NULL, [=](bool isSuccess) {
       if (isSuccess) {
         auto _player = getPlayerById(textureId, false);
         if (_player == NULL) {
