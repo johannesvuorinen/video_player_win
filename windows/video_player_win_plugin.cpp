@@ -170,6 +170,13 @@ private:
         texture_registar_->MarkTextureFrameAvailable(textureId);
       }
   }
+
+  void OnProcessFrame(ID3D11Texture2D* texture) {
+	  //if (texture_registar_ != NULL && textureId != -1) {
+	  //	initTexture(texture);
+	  //    texture_registar_->MarkTextureFrameAvailable(textureId);
+	  //}
+  }
 };
 
 std::map<int64_t, MyPlayerInternal*> playerMap; // textureId -> MyPlayerInternal*
