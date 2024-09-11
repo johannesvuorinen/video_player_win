@@ -13,15 +13,9 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
   @visibleForTesting
   final methodChannel = const MethodChannel('video_player_win');
 
-  final playerMap = <int, WeakReference<WinVideoPlayerController>>{};
+  final playerMap = <int, WinVideoPlayerController>{};
 
   MethodChannelVideoPlayerWin() {
-    assert(() {
-      // When hot-reload in debugging mode, clear all old players created before hot-reload
-      methodChannel.invokeMethod<void>('clearAll');
-      return true;
-    }());
-
     methodChannel.setMethodCallHandler((call) async {
       //log("[videoplayer] native->flutter: $call");
       int? textureId = call.arguments["textureId"];
@@ -34,7 +28,7 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
 
       if (call.method == "OnPlaybackEvent") {
         int state = call.arguments["state"]!;
-        player.target?.onPlaybackEvent_(state);
+        player.onPlaybackEvent_(state);
       } else {
         assert(false, "unknown call from native: ${call.method}");
       }
@@ -48,7 +42,7 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
 
   @override
   WinVideoPlayerController? getPlayerByTextureId(int textureId) {
-    return playerMap[textureId]?.target;
+    return playerMap[textureId];
   }
 
   @override
@@ -62,19 +56,18 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
     int width = arguments["videoWidth"];
     int height = arguments["videoHeight"];
     double volume = arguments["volume"];
-    int textureId = arguments["textureId"];
     var value = WinVideoPlayerValue(
-      textureId: textureId,
       position: Duration.zero,
       duration: Duration(milliseconds: arguments["duration"]),
       size: Size(width.toDouble(), height.toDouble()),
       isPlaying: false,
+      hasError: false,
       isInitialized: true,
       volume: volume,
     );
 
-    playerMap[value.textureId] =
-        WeakReference<WinVideoPlayerController>(player);
+    value.textureId = arguments["textureId"];
+    playerMap[value.textureId] = player;
     return value;
   }
 
@@ -127,7 +120,7 @@ class MethodChannelVideoPlayerWin extends VideoPlayerWinPlatform {
     await methodChannel
         .invokeMethod<bool>('shutdown', {"textureId": textureId});
     // NOTE: delay some time to wait last callbacks finished
-    await Future.delayed(const Duration(milliseconds: 100));
+    await Future.delayed(const Duration(milliseconds: 3000));
     await methodChannel.invokeMethod<bool>('dispose', {"textureId": textureId});
   }
 }
