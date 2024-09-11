@@ -9,18 +9,12 @@
 
 #include <wil/com.h>
 
-#include "DX11VideoRenderer/DX11VideoRenderer.h"
-
 class MyPlayerCallback : public IUnknown
 {
 public:
-//#ifdef WIN32
-	virtual void OnProcessFrame(ID3D11Texture2D* texture) = 0;
-//#else
 	virtual void OnProcessSample(REFGUID guidMajorMediaType, DWORD dwSampleFlags,
 		LONGLONG llSampleTime, LONGLONG llSampleDuration, const BYTE* pSampleBuffer,
 		DWORD dwSampleSize) = 0;
-//#endif
 };
 
 class MyPlayer : public IMFAsyncCallback
@@ -53,8 +47,9 @@ public:
 
 	HRESULT SetPlaybackSpeed(float fRate);
 
-	HRESULT GetVolume(float* pVol);
+	HRESULT GetVolume(float *pVol);
 	HRESULT SetVolume(float vol);
+	HRESULT SetMute(bool bMute);
 
 	MyPlayer();
 	virtual ~MyPlayer();
@@ -74,29 +69,16 @@ private:
 	HRESULT initAudioVolume();
 	HRESULT CreateTopology(IMFMediaSource* pSource, IMFActivate* pSinkActivate, IMFTopology** ppTopo);
 	void cancelAsyncLoad();
-	HRESULT doSetVolume(float fVol);
-	bool hasAudioOutputDevice();
 
 	wil::com_ptr<IMFMediaSession> m_pSession;
 	wil::com_ptr<IMFMediaSource> m_pMediaSource;
-	wil::com_ptr<IMFActivate> m_pVideoTransformActivate;
 	wil::com_ptr<IMFActivate> m_pVideoSinkActivate;
-	wil::com_ptr<IMFActivate> m_pAudioRendererActivate;
-	wil::com_ptr<IMFAudioStreamVolume> m_pAudioVolume;
+    wil::com_ptr<IMFActivate> m_pAudioRendererActivate;
+	wil::com_ptr<ISimpleAudioVolume> m_pSimpleAudioVolume;
 	wil::com_ptr<IMFPresentationClock> m_pClock;
 	wil::com_ptr<IMFRateControl> m_pRate;
 	wil::com_ptr<IMFSourceResolver> m_pSourceResolver;
 	wil::com_ptr<IUnknown> m_pSourceResolverCancelCookie;
 	MFTIME m_hnsDuration;
 	bool m_isShutdown;
-	HWND m_ChildWnd;
-
-	float m_vol;
-	bool m_isUserAskPlaying;
-	LONGLONG m_lastPosition = 0;
-
-	// save parameters in OpenURL(), used to re-open when open failed
-	bool m_topoSet = false; // is topology set succesfully
-	std::function<void(std::function<void(bool)>)> m_reopenFunc;
-	//
 };
