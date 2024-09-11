@@ -8,11 +8,11 @@ import 'video_player_win.dart';
 import 'video_player_win_platform_interface.dart';
 
 class WindowsVideoPlayer extends VideoPlayerPlatform {
+
   static void registerWith() {
     VideoPlayerPlatform.instance = WindowsVideoPlayer();
   }
 
-  final mControllerMap = <int, WinVideoPlayerController>{};
 
   @override
   Future<void> init() async {
@@ -22,62 +22,39 @@ class WindowsVideoPlayer extends VideoPlayerPlatform {
   /// Clears one video.
   @override
   Future<void> dispose(int textureId) async {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
-    await controller?.dispose();
-    mControllerMap.remove(textureId);
+    await VideoPlayerWinPlatform.instance.dispose(textureId);
   }
 
   /// Creates an instance of a video player and returns its textureId.
   @override
   Future<int?> create(DataSource dataSource) async {
     if (dataSource.sourceType == DataSourceType.file) {
-      // dataSource.uri is url encoded and has a file:// scheme.
-      // But if the dataSource.uri original path contains non-ASCII characters,
-      // it will cause the IMFSourceResolver API url decoding to fail and cause
-      // the app to crash.
-      //
-      // To avoid this, need to pass dataSource.uri to Uri.parse() and get
-      // the path from uri.toFilePath(). It removes the file:// scheme and
-      // url decodes the path.
-      //
-      // Without the file:// scheme, the IMFSourceResolver API treats the "%"
-      // character as a normal string instead of url decoding the path.
-      var uri = Uri.parse(dataSource.uri!);
-      var controller = WinVideoPlayerController.file(File(uri.toFilePath()),
-          isBridgeMode: true);
+      var controller = WinVideoPlayerController.file(File(dataSource.uri!));
       await controller.initialize();
-      if (controller.textureId_ > 0) {
-        mControllerMap[controller.textureId_] = controller;
-        return controller.textureId_;
-      }
-      return null;
+      return controller.textureId_ > 0 ? controller.textureId_ : null;
     } else if (dataSource.sourceType == DataSourceType.network) {
-      var controller =
-          WinVideoPlayerController.network(dataSource.uri!, isBridgeMode: true);
+      var controller = WinVideoPlayerController.network(dataSource.uri!);
       await controller.initialize();
-      if (controller.textureId_ > 0) {
-        mControllerMap[controller.textureId_] = controller;
-        return controller.textureId_;
-      }
+      return controller.textureId_ > 0 ? controller.textureId_ : null;
     } else {
-      throw UnimplementedError(
-          'create() has not been implemented for dataSource type [assets] and [contentUri] in Windows OS');
+      throw UnimplementedError('create() has not been implemented for dataSource type [assets] and [contentUri] in Windows OS');
     }
   }
 
   /// Returns a Stream of [VideoEventType]s.
   @override
   Stream<VideoEvent> videoEventsFor(int textureId) {
-    var player =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
+    var player = VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
     if (player != null) {
       return player.videoEventStream;
     } else {
       // send an intialized-failed event
       var streamController = StreamController<VideoEvent>();
       streamController.add(VideoEvent(
-          eventType: VideoEventType.initialized, duration: null, size: null));
+        eventType: VideoEventType.initialized,
+        duration: null,
+        size: null
+      ));
       return streamController.stream;
     }
   }
@@ -85,70 +62,56 @@ class WindowsVideoPlayer extends VideoPlayerPlatform {
   /// Sets the looping attribute of the video.
   @override
   Future<void> setLooping(int textureId, bool looping) async {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
-    await controller?.setLooping(looping);
+    await VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)?.setLooping(looping);
   }
 
   /// Starts the video playback.
   @override
   Future<void> play(int textureId) async {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
-    await controller?.play();
+    await VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)?.play();
   }
 
   /// Stops the video playback.
   @override
   Future<void> pause(int textureId) async {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
-    await controller?.pause();
+    await VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)?.pause();
   }
 
   /// Sets the volume to a range between 0.0 and 1.0.
   @override
   Future<void> setVolume(int textureId, double volume) async {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
-    await controller?.setVolume(volume);
+    await VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)?.setVolume(volume);
   }
 
   /// Sets the video position to a [Duration] from the start.
   @override
   Future<void> seekTo(int textureId, Duration position) async {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
-    await controller?.seekTo(position);
+    await VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)?.seekTo(position);
   }
 
   /// Sets the playback speed to a [speed] value indicating the playback rate.
   @override
   Future<void> setPlaybackSpeed(int textureId, double speed) async {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
-    await controller?.setPlaybackSpeed(speed);
+    await VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)?.setPlaybackSpeed(speed);
   }
 
   /// Gets the video position as [Duration] from the start.
   @override
   Future<Duration> getPosition(int textureId) async {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId);
-    return await controller?.position ?? const Duration();
+    return VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)!.value.position;
   }
 
   /// Returns a widget displaying the video with a given textureID.
   @override
   Widget buildView(int textureId) {
-    var controller =
-        VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)!;
+    var controller = VideoPlayerWinPlatform.instance.getPlayerByTextureId(textureId)!;
     return WinVideoPlayer(controller);
   }
 
   /// Sets the audio mode to mix with other sources
-  @override
+   @override
   Future<void> setMixWithOthers(bool mixWithOthers) async {
     // do nothing... not support in Windows OS
   }
+
 }
